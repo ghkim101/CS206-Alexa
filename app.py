@@ -73,11 +73,23 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         speech_text = "I feel lazy... nothing is new."
         last_hour_date_time = datetime.utcnow() - timedelta(hours = 1)
 
-        with conn.cursor() as cur:
-            cur.execute('select * from articles  ORDER BY RAND() limit 1');
-            result = cur.fetchall()
-            for row in result:
-              speech_text = "Today on New York Times, one homepage headline is %s. I peeked the first sentence, and it goes like this. %s" % (row[2], row[3])
+        try:
+            side = handler_input.request_envelope.request.intent.slots["Side"].value.lower()
+        except AttributeError:
+            logger.info("Could not resolve item name")
+            side = None
+
+        # with conn.cursor() as cur:
+            # cur.execute('select * from articles where updated_at >= %s ORDER BY RAND() limit 1', last_hour_date_time.strftime('%Y-%m-%d %H:%M:%S'));
+        #     if item_
+        #     cur.execute('select * from articles where side = %s ORDER BY RAND() limit 1', last_hour_date_time.strftime('%Y-%m-%d %H:%M:%S'));
+        #
+        #     result = cur.fetchall()
+        #     for row in result:
+        #       speech_text = "Today on New York Times, one homepage headline is %s. I peeked the first sentence, and it goes like this. %s" % (row[2], row[3])
+        speech_text = "Okay your side is %s" % side
+        if side is None:
+            speech_text = "I did not get any side information from you"
         handler_input.response_builder.speak(speech_text).set_card(
             SimpleCard("News Loop", speech_text)).set_should_end_session(
             True)
