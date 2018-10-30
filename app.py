@@ -16,6 +16,8 @@ from ask_sdk_core.handler_input import HandlerInput
 
 from ask_sdk_model.ui import SimpleCard
 from ask_sdk_model import Response
+from ask_sdk_model.dialog import ElicitSlotDirective
+from ask_sdk_model.slu.entityresolution import StatusCode
 
 sb = SkillBuilder()
 
@@ -70,14 +72,29 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = "I feel lazy... nothing is new."
         last_hour_date_time = datetime.utcnow() - timedelta(hours = 1)
-
+        side = None
         try:
-            side = handler_input.request_envelope.request.intent.slots["Side"].value.lower()
-        except AttributeError:
-            logger.info("Could not resolve item name")
-            side = None
+            current_slot = handler_input.request_envelope.request.intent.slots["Side"]
+            if current_slot.resolutions.resolutions_per_authority[0].status.code == StatusCode.ER_SUCCESS_MATCH:
+                if len(current_slot.resolutions.resolutions_per_authority[0].values) > 1:
+                    prompt = "Which would you like to hear from"
+                    values = " or ".join([e.value.name for e in current_slot.resolutions.resolutions_per_authority[0].values])
+                    prompt += values + " ?"
+                    return handler_input.response_builder.speak(prompt).ask(prompt).add_directive(ElicitSlotDirective(slot_to_elicit=current_slot.name)).response
+                else:
+                    side = current_slot.resolutions.resolutions_per_authority[0].values[0].value.name
+                    logger.info("side fetched")
+                    logger.info(side)
+                    with conn.cursor() as cur:
+                        cur.execute('select * from articles where side = %s ORDER BY RAND() limit 1', side);
+                        result = cur.fetchall()
+                        for row in result:
+                            speech_text = "News on the %s, according to %s, %s. I peeked the first sentence, and it goes like this. %s" % (row[7], row[9], row[2], row[3])
+
+        except Exception as e:
+                 logger.info(e)
+
 
         # with conn.cursor() as cur:
             # cur.execute('select * from articles where updated_at >= %s ORDER BY RAND() limit 1', last_hour_date_time.strftime('%Y-%m-%d %H:%M:%S'));
@@ -86,10 +103,13 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         #
         #     result = cur.fetchall()
         #     for row in result:
-        #       speech_text = "Today on New York Times, one homepage headline is %s. I peeked the first sentence, and it goes like this. %s" % (row[2], row[3])
-        speech_text = "Okay your side is %s" % side
         if side is None:
-            speech_text = "I did not get any side information from you"
+            with conn.cursor() as cur:
+                cur.execute('select * from articles ORDER BY RAND() limit 1');
+                result = cur.fetchall()
+                for row in result:
+                    speech_text = "Today on %s, one homepage headline is %s. I peeked the first sentence, and it goes like this. %s" % (row[9],row[2], row[3])
+
         handler_input.response_builder.speak(speech_text).set_card(
             SimpleCard("News Loop", speech_text)).set_should_end_session(
             True)
