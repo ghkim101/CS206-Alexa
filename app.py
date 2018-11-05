@@ -6,6 +6,7 @@ import logging
 import pymysql
 import rds_config
 import sys
+import math
 from datetime import datetime, timedelta
 
 from ask_sdk_core.skill_builder import SkillBuilder
@@ -39,15 +40,7 @@ except:
     logger.error("ERROR: Unexpected error: Could not connect to MySql instance.")
     sys.exit()
 logger.info("connection worked")
-# speech_text = "not fetched"
-# last_hour_date_time = datetime.now() - timedelta(hours = 1)
-#
-# with conn.cursor() as cur:
-#     cur.execute('select * from articles where updated_at >= %s ORDER BY RAND() limit 1', last_hour_date_time.strftime('%Y-%m-%d %H:%M:%S'));
-#     result = cur.fetchall()
-#     for row in result:
-#       speech_text = "Today on New York Times, one homepage headline is %s. I peeked the first sentence, and it goes like this. %s" % (row[2], row[3])
-#       print (speech_text)
+
 
 class LaunchRequestHandler(AbstractRequestHandler):
     """Handler for Skill Launch."""
@@ -57,7 +50,7 @@ class LaunchRequestHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = "Welcome to the Alexa Skills Kit, you can say hello!"
+        speech_text = "Hi there! I can help you navigate news better. Ask me anything!"
 
         handler_input.response_builder.speak(speech_text).set_card(
             SimpleCard("Hello World", speech_text)).set_should_end_session(
@@ -72,13 +65,15 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
+        logger.info("In WhatsNewIntentHandler")
+
         last_hour_date_time = datetime.utcnow() - timedelta(hours = 1)
         side = None
         try:
             current_slot = handler_input.request_envelope.request.intent.slots["Side"]
             if current_slot.resolutions.resolutions_per_authority[0].status.code == StatusCode.ER_SUCCESS_MATCH:
                 if len(current_slot.resolutions.resolutions_per_authority[0].values) > 1:
-                    prompt = "Which would you like to hear from"
+                    prompt = "I see. Which would you like to hear more from"
                     values = " or ".join([e.value.name for e in current_slot.resolutions.resolutions_per_authority[0].values])
                     prompt += values + " ?"
                     return handler_input.response_builder.speak(prompt).ask(prompt).add_directive(ElicitSlotDirective(slot_to_elicit=current_slot.name)).response
@@ -90,46 +85,150 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
                         cur.execute('select * from articles where side = %s ORDER BY RAND() limit 1', side);
                         result = cur.fetchall()
                         for row in result:
-                            speech_text = "News on the %s, according to %s, %s. I peeked the first sentence, and it goes like this. %s" % (row[7], row[9], row[2], row[3])
+                            speech_text = "Here is one headline from the %s side. %s. Are you interested in this one?" % (row[7], row[2])
 
         except Exception as e:
                  logger.info(e)
 
+        attribute_manager = handler_input.attributes_manager
+        session_attr = attribute_manager.session_attributes
 
-        # with conn.cursor() as cur:
-            # cur.execute('select * from articles where updated_at >= %s ORDER BY RAND() limit 1', last_hour_date_time.strftime('%Y-%m-%d %H:%M:%S'));
-        #     if item_
-        #     cur.execute('select * from articles where side = %s ORDER BY RAND() limit 1', last_hour_date_time.strftime('%Y-%m-%d %H:%M:%S'));
-        #
-        #     result = cur.fetchall()
-        #     for row in result:
         if side is None:
             with conn.cursor() as cur:
-                cur.execute('select * from articles ORDER BY RAND() limit 1');
+                cur.execute('select * from articles where side = %s ORDER BY created_at limit 3', 'unbiased_balanced');
                 result = cur.fetchall()
-                for row in result:
-                    speech_text = "Today on %s, one homepage headline is %s. I peeked the first sentence, and it goes like this. %s" % (row[9],row[2], row[3])
+                speech_text = "These are the top three headlines from all sides."
+                countword = "First"
+                ids = {}
+                for index, row in enumerate(result):
+                    speech_text += " %s, %s." % (countword, row[2])
+                    ids[index] = row[0]
+                    if index == 0:
+                        countword = "Second"
+                    elif index == 1:
+                        countword = "Third"
+                session_attr["ids"] = ids
+                speech_text += "Are you interested in any of these?"
 
-        handler_input.response_builder.speak(speech_text).set_card(
-            SimpleCard("News Loop", speech_text)).set_should_end_session(
-            True)
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
-class HelloWorldIntentHandler(AbstractRequestHandler):
-    """Handler for Hello World Intent."""
+
+class ChooseArticleIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
-        # type: (HandlerInput) -> bool
-        return is_intent_name("HelloWorldIntent")(handler_input)
+        session_attr = handler_input.attributes_manager.session_attributes
+        return (is_intent_name("ChooseArticleIntent")(handler_input) and "ids" in session_attr)
+
+    def get_duration(self, wordcount):
+        minutes = wordcount / 150
+        logger.info(wordcount)
+        logger.info(minutes)
+        round_up = int(math.ceil(minutes))
+        return round_up
+
+    def handle(self, handler_input):
+        logger.info("In ConfirmArticleHandler")
+        attribute_manager = handler_input.attributes_manager
+        session_attr = attribute_manager.session_attributes
+        # _ = attribute_manager.request_attributes["_"]
+        ids = session_attr["ids"]
+        logger.info(ids)
+        speech_text = "Sure, here is the snippet of the story. "
+        current_slot = handler_input.request_envelope.request.intent.slots["Order"]
+        order = current_slot.value
+        id_selected = ids[order]
+        with conn.cursor() as cur:
+            cur.execute('select * from articles where id = %s', id_selected)
+            results = cur.fetchall()
+            for row in results:
+                session_attr['article'] = row
+                speech_text += row[3]
+                speech_text += "..."
+                duration = self.get_duration(row[8])
+                speech_text += ' This articles takes ' + str(duration) + ' minutes to read.'
+                break
+        speech_text += " Do you have time for this?"
+
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
+        return handler_input.response_builder.response
+
+class YesIntentHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        session_attr = handler_input.attributes_manager.session_attributes
+        return (is_intent_name("AMAZON.YesIntent")(handler_input) and
+                "article" in session_attr)
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = "Hello Python World from Classes!"
+        logger.info("In YesIntentHandler")
 
-        handler_input.response_builder.speak(speech_text).set_card(
-            SimpleCard("Hello World", speech_text)).set_should_end_session(
-            True)
+        attribute_manager = handler_input.attributes_manager
+        session_attr = attribute_manager.session_attributes
+        article = session_attr['article']
+        speech_text =  ("<say-as interpret-as='interjection'>okay here we go! </say-as>"
+                   "{}" "<say-as interpret-as='interjection'> That's the end of the article.</say-as>"
+                   "<amazon:effect name='whispered'> Anything you would want to know more? </amazon:effect>"
+                  .format(article[10]))
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
+
+class AskDetailsHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        session_attr = handler_input.attributes_manager.session_attributes
+        return (is_intent_name("AskDetailsIntent")(handler_input) and
+                "article" in session_attr)
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        logger.info("In AskDetailsHandler")
+
+        attribute_manager = handler_input.attributes_manager
+        session_attr = attribute_manager.session_attributes
+        article = session_attr['article']
+
+        speech_text = "I unfortunately do not know much about that."
+        try:
+            current_slot = handler_input.request_envelope.request.intent.slots["details"]
+            if current_slot.resolutions.resolutions_per_authority[0].status.code == StatusCode.ER_SUCCESS_MATCH:
+                author = current_slot.resolutions.resolutions_per_authority[0].values[0].value.name
+                logger.info("author fetched")
+                speech_text = "it's written by %s. Do you want to know more about or from this journalist?" % article[12]
+        except Exception as e:
+            logger.info(e)
+
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
+        return handler_input.response_builder.response
+
+
+class RelatedArticleHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        session_attr = handler_input.attributes_manager.session_attributes
+        return (is_intent_name("RelatedArticleIntent")(handler_input) and
+                "article" in session_attr)
+    def handle(self, handler_input):
+        logger.info("In RelatedArticleHandler")
+        attribute_manager = handler_input.attributes_manager
+        session_attr = attribute_manager.session_attributes
+        article = session_attr['article']
+        speech_text = "I'm sorry I don't see any related article on the site"
+        try:
+            current_slot = handler_input.request_envelope.request.intent.slots['Side']
+            if current_slot.resolutions.resolutions_per_authority[0].status.code == StatusCode.ER_SUCCESS_MATCH:
+                logger.info("slot success")
+                side = current_slot.resolutions.resolutions_per_authority[0].values[0].value.name
+                with conn.cursor() as cur:
+                    cur.execute("select * from articles where topic = %s and lower(side) LIKE %s limit 1" ,(article[1], side))
+                    result = cur.fetchall()
+                    for row in result:
+                        speech_text = "There is a related article from %s, as listed by AllSides.com as %s. Here is the headline. %s. " % (row[9], row[7] ,row[2])
+                        speech_text += " Would you like to hear more?"
+
+        except Exception as e:
+            logger.info(e)
+
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
+        return handler_input.response_builder.response
 
 class HelpIntentHandler(AbstractRequestHandler):
     """Handler for Help Intent."""
@@ -139,7 +238,7 @@ class HelpIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = "You can say hello to me!"
+        speech_text = "You can ask whats new to me!"
 
         handler_input.response_builder.speak(speech_text).ask(
             speech_text).set_card(SimpleCard(
@@ -175,9 +274,9 @@ class FallbackIntentHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
         speech_text = (
-            "The Hello World skill can't help you with that.  "
-            "You can say hello!!")
-        reprompt = "You can say hello!!"
+            "I can't help you with that.  "
+            "I only know about news... ")
+        reprompt = "You can say what's new!"
         handler_input.response_builder.speak(speech_text).ask(reprompt)
         return handler_input.response_builder.response
 
@@ -213,12 +312,14 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
 
 sb.add_request_handler(LaunchRequestHandler())
 sb.add_request_handler(WhatsNewIntentHandler())
-sb.add_request_handler(HelloWorldIntentHandler())
 sb.add_request_handler(HelpIntentHandler())
 sb.add_request_handler(CancelOrStopIntentHandler())
 sb.add_request_handler(FallbackIntentHandler())
 sb.add_request_handler(SessionEndedRequestHandler())
-
+sb.add_request_handler(ChooseArticleIntentHandler())
+sb.add_request_handler(YesIntentHandler())
+sb.add_request_handler(AskDetailsHandler())
+sb.add_request_handler(RelatedArticleHandler())
 sb.add_exception_handler(CatchAllExceptionHandler())
 
 handler = sb.lambda_handler()
