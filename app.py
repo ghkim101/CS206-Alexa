@@ -57,6 +57,36 @@ class LaunchRequestHandler(AbstractRequestHandler):
             False)
         return handler_input.response_builder.response
 
+class WhatsNewSpecificIntentHandler(AbstractRequestHandler):
+    """Handler for Whats New Intent."""
+    def can_handle(self, handler_input):
+        # type: (HandlerInput) -> bool
+        return is_intent_name("WhatsNewSpecificIntent")(handler_input)
+    def handle(self, handler_input):
+        logger.info("In WhatsNewSpecificIntentHandler")
+
+        attribute_manager = handler_input.attributes_manager
+        session_attr = attribute_manager.session_attributes
+        speech_text = "I couldn't find anything about it"
+        try:
+            current_slot = handler_input.request_envelope.request.intent.slots["topic"]
+            if current_slot.resolutions.resolutions_per_authority[0].status.code == StatusCode.ER_SUCCESS_MATCH:
+                topic = current_slot.resolutions.resolutions_per_authority[0].values[0].value.name
+                speech_text = "Currently there is no news about " +topic
+                with conn.cursor() as cur:
+                    logger.info(topic)
+                    cur.execute('select * from articles where lower(topic) = %s ORDER BY created_at desc limit 1', topic);
+                    result = cur.fetchall()
+                    for row in result:
+                        speech_text = "Here is one headline in %s. Title is %s. Do you want to read this article?" % (row[1], row[2])
+                        session_attr["article"] = row
+
+        except Exception as e:
+                 logger.info(e)
+
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
+        return handler_input.response_builder.response
+
 class WhatsNewIntentHandler(AbstractRequestHandler):
     """Handler for Whats New Intent."""
     def can_handle(self, handler_input):
@@ -67,48 +97,26 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         # type: (HandlerInput) -> Response
         logger.info("In WhatsNewIntentHandler")
 
-        last_hour_date_time = datetime.utcnow() - timedelta(hours = 1)
-        side = None
-        try:
-            current_slot = handler_input.request_envelope.request.intent.slots["Side"]
-            if current_slot.resolutions.resolutions_per_authority[0].status.code == StatusCode.ER_SUCCESS_MATCH:
-                if len(current_slot.resolutions.resolutions_per_authority[0].values) > 1:
-                    prompt = "I see. Which would you like to hear more from"
-                    values = " or ".join([e.value.name for e in current_slot.resolutions.resolutions_per_authority[0].values])
-                    prompt += values + " ?"
-                    return handler_input.response_builder.speak(prompt).ask(prompt).add_directive(ElicitSlotDirective(slot_to_elicit=current_slot.name)).response
-                else:
-                    side = current_slot.resolutions.resolutions_per_authority[0].values[0].value.name
-                    logger.info("side fetched")
-                    logger.info(side)
-                    with conn.cursor() as cur:
-                        cur.execute('select * from articles where side = %s ORDER BY RAND() limit 1', side);
-                        result = cur.fetchall()
-                        for row in result:
-                            speech_text = "Here is one headline from the %s side. %s. Are you interested in this one?" % (row[7], row[2])
-
-        except Exception as e:
-                 logger.info(e)
 
         attribute_manager = handler_input.attributes_manager
         session_attr = attribute_manager.session_attributes
 
-        if side is None:
-            with conn.cursor() as cur:
-                cur.execute('select * from articles where side = %s ORDER BY created_at limit 3', 'unbiased_balanced');
-                result = cur.fetchall()
-                speech_text = "These are the top three headlines from all sides."
-                countword = "First"
-                ids = {}
-                for index, row in enumerate(result):
-                    speech_text += " %s, %s." % (countword, row[2])
-                    ids[index] = row[0]
-                    if index == 0:
-                        countword = "Second"
-                    elif index == 1:
-                        countword = "Third"
-                session_attr["ids"] = ids
-                speech_text += "Are you interested in any of these?"
+
+        with conn.cursor() as cur:
+            cur.execute('select * from articles where side = %s ORDER BY created_at DESC limit 3', 'unbiased_balanced');
+            result = cur.fetchall()
+            speech_text = "These are the top three headlines."
+            countword = "First"
+            ids = {}
+            for index, row in enumerate(result):
+                speech_text += " %s, %s." % (countword, row[2])
+                ids[index] = row[0]
+                if index == 0:
+                    countword = "Second"
+                elif index == 1:
+                    countword = "Third"
+            session_attr["ids"] = ids
+            speech_text += "Are you interested in any of these topics?"
 
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
@@ -133,21 +141,40 @@ class ChooseArticleIntentHandler(AbstractRequestHandler):
         # _ = attribute_manager.request_attributes["_"]
         ids = session_attr["ids"]
         logger.info(ids)
-        speech_text = "Sure, here is the snippet of the story. "
-        current_slot = handler_input.request_envelope.request.intent.slots["Order"]
-        order = current_slot.value
-        id_selected = ids[order]
+        speech_text = "Got you! "
+        id_selected = ids['0']
+        try:
+            current_slot = handler_input.request_envelope.request.intent.slots["Order"]
+            order = int(current_slot.value)
+            id_selected = ids[str(order-1)]
+        except Exception as e:
+            logger.info(e)
+            speech_text += " Let's go with the first one then."
+
         with conn.cursor() as cur:
             cur.execute('select * from articles where id = %s', id_selected)
             results = cur.fetchall()
+            logger.info(results)
+
             for row in results:
                 session_attr['article'] = row
-                speech_text += row[3]
-                speech_text += "..."
-                duration = self.get_duration(row[8])
-                speech_text += ' This articles takes ' + str(duration) + ' minutes to read.'
-                break
-        speech_text += " Do you have time for this?"
+                # speech_text += row[3]
+                # speech_text += "..."
+                speech_text += 'Here is a quick summary of the issue. '
+                speech_text += row[10]
+                speech_text += 'Would you like to read an article about this? '
+                cur.execute("select * from articles join article_relations on articles.id = article_relations.related_to_id where article_relations.article_id = %s and lower(article_relations.relation_type) = 'center' or lower(article_relations.relation_type) like 'lean' limit 1" ,row[0])
+                related = cur.fetchall()
+                for related_article in related:
+                    related_duration = self.get_duration(related_article[8])
+                    if related_duration > 0:
+                        speech_text += 'It takes ' + str(self.get_duration(related_article[8])) + ' minutes to read.'
+                    else:
+                        speech_text += 'It takes less than a minute to read.'
+                    session_attr['article'] = related_article
+                # else:
+                #     speech_text += ' This articles takes ' + str(duration) + ' minutes to read. Do you have time for this?'
+                #     break
 
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
@@ -165,10 +192,10 @@ class YesIntentHandler(AbstractRequestHandler):
         attribute_manager = handler_input.attributes_manager
         session_attr = attribute_manager.session_attributes
         article = session_attr['article']
-        speech_text =  ("<say-as interpret-as='interjection'>okay here we go! </say-as>"
-                   "{}" "<say-as interpret-as='interjection'> That's the end of the article.</say-as>"
-                   "<amazon:effect name='whispered'> Anything you would want to know more? </amazon:effect>"
-                  .format(article[10]))
+        speech_text =  ("<say-as interpret-as='interjection'> Okay! here we go! </say-as>"
+                   "{}" "...That's the end of the article."
+                   " Anything you would want to know more about?"
+                  .format(article[10][:100]))
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
@@ -193,7 +220,7 @@ class AskDetailsHandler(AbstractRequestHandler):
             if current_slot.resolutions.resolutions_per_authority[0].status.code == StatusCode.ER_SUCCESS_MATCH:
                 author = current_slot.resolutions.resolutions_per_authority[0].values[0].value.name
                 logger.info("author fetched")
-                speech_text = "it's written by %s. Do you want to know more about or from this journalist?" % article[12]
+                speech_text = "The writer is specified as  %s. Do you want to know more about or from this writer?" % article[12]
         except Exception as e:
             logger.info(e)
 
@@ -211,18 +238,26 @@ class RelatedArticleHandler(AbstractRequestHandler):
         attribute_manager = handler_input.attributes_manager
         session_attr = attribute_manager.session_attributes
         article = session_attr['article']
-        speech_text = "I'm sorry I don't see any related article on the site"
+        speech_text = "I'm sorry I could not find more related articles"
         try:
             current_slot = handler_input.request_envelope.request.intent.slots['Side']
             if current_slot.resolutions.resolutions_per_authority[0].status.code == StatusCode.ER_SUCCESS_MATCH:
                 logger.info("slot success")
                 side = current_slot.resolutions.resolutions_per_authority[0].values[0].value.name
+                speech_text = "I'm sorry there is no more related articles from %s side" % side
+
                 with conn.cursor() as cur:
-                    cur.execute("select * from articles where topic = %s and lower(side) LIKE %s limit 1" ,(article[1], side))
-                    result = cur.fetchall()
-                    for row in result:
-                        speech_text = "There is a related article from %s, as listed by AllSides.com as %s. Here is the headline. %s. " % (row[9], row[7] ,row[2])
-                        speech_text += " Would you like to hear more?"
+                    cur.execute("select article_id from article_relations where related_to_id = %s limit 1" ,article[0])
+                    origin_result = cur.fetchall()
+                    origin_article_id = ''
+                    for origin in origin_result:
+                        logger.info(origin[0])
+                        cur.execute("select * from articles join article_relations on articles.id = article_relations.related_to_id where article_relations.article_id = %s and lower(article_relations.relation_type) like %s and article_relations.related_to_id != %s  limit 1" ,(origin[0], side,article[0]))
+                        result = cur.fetchall()
+                        for row in result:
+                            speech_text = "There is a related article from %s, categorized as %s by Allsides.com. Here is the title. %s. " % (row[9], row[7] ,row[2])
+                            speech_text += " Would you like to hear more?"
+                            session_attr['article'] = row
 
         except Exception as e:
             logger.info(e)
@@ -255,10 +290,9 @@ class CancelOrStopIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = "Goodbye!"
+        speech_text = "You’re welcome! As Walter Cronkite would say, 'And that’s the way it is' "
 
-        handler_input.response_builder.speak(speech_text).set_card(
-            SimpleCard("Hello World", speech_text))
+        handler_input.response_builder.speak(speech_text)
         return handler_input.response_builder.response
 
 
@@ -273,11 +307,9 @@ class FallbackIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = (
-            "I can't help you with that.  "
-            "I only know about news... ")
-        reprompt = "You can say what's new!"
-        handler_input.response_builder.speak(speech_text).ask(reprompt)
+        speech_text = "Okay bye for now! As Walter Cronkite would say, 'And that’s the way it is' "
+
+        handler_input.response_builder.speak(speech_text)
         return handler_input.response_builder.response
 
 
@@ -312,6 +344,8 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
 
 sb.add_request_handler(LaunchRequestHandler())
 sb.add_request_handler(WhatsNewIntentHandler())
+sb.add_request_handler(WhatsNewSpecificIntentHandler())
+
 sb.add_request_handler(HelpIntentHandler())
 sb.add_request_handler(CancelOrStopIntentHandler())
 sb.add_request_handler(FallbackIntentHandler())
