@@ -30,10 +30,11 @@ db_name = rds_config.db_name
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-#fh = logging.FileHandler('spam.log')
 ch = logging.StreamHandler()
 logger.addHandler(ch)
 
+
+#conection
 try:
     conn = pymysql.connect(rds_host, user=name, passwd=password, db=db_name, connect_timeout=5)
 except:
@@ -41,6 +42,7 @@ except:
     sys.exit()
 logger.info("connection worked")
 
+#helpers for getting and posting attributes
 def getAttribute(handler_input, key):
     attribute_manager = handler_input.attributes_manager
     session_attr = attribute_manager.session_attributes
@@ -51,6 +53,7 @@ def postAttribute(handler_input, key, value):
     session_attr = attribute_manager.session_attributes
     session_attr[key] = value
 
+#helper for getting slot of specified key, return false for success if fails to fetch
 def getSlot(handler_input, key):
     try:
         slot = handler_input.request_envelope.request.intent.slots[key]
@@ -61,7 +64,7 @@ def getSlot(handler_input, key):
         logger.info(e)
         return None , False
 
-
+### reacts to invocation
 class LaunchRequestHandler(AbstractRequestHandler):
     """Handler for Skill Launch."""
     def can_handle(self, handler_input):
@@ -76,6 +79,11 @@ class LaunchRequestHandler(AbstractRequestHandler):
             SimpleCard("Hello World", speech_text)).set_should_end_session(
             False)
         return handler_input.response_builder.response
+
+
+### Get an article in the topic when asked about specific topic. Currently supports topic only (not source).
+### Asks if like the article => Yes_Intent_Hanlder
+### TODO: accomodate source slot, Integrate into what's new handler
 
 class WhatsNewSpecificIntentHandler(AbstractRequestHandler):
     """Handler for Whats New Intent."""
@@ -102,6 +110,10 @@ class WhatsNewSpecificIntentHandler(AbstractRequestHandler):
 
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
+
+### Get three top articles from all sides (unbiased_balanced ones)
+### Asks if like any one of the articles => Yes_Intent_Hanlder
+### TODO: change to reflect new data pool, not just all-sides
 
 class WhatsNewIntentHandler(AbstractRequestHandler):
     """Handler for Whats New Intent."""
@@ -132,6 +144,9 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
+### User mentions order (first, second, third) -> Gives quick summary and lets user know how long the chosen article takes
+### Asks user if wants to read the chosen articles
+### TODO:  more accomodation of intent invocation, functionality to send email if says no for reading time.
 
 class ChooseArticleIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
@@ -180,6 +195,11 @@ class ChooseArticleIntentHandler(AbstractRequestHandler):
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
+
+### Reading article if user says yes.
+### Asks whether the users wants to know more about details of an article
+### TODO: there are more contexts for user to say yes other than yes to reading an article - we have to differentiate invocation after"yes" according to contexts
+###       no gracious fallback when said no
 class YesIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         session_attr = handler_input.attributes_manager.session_attributes
@@ -197,7 +217,9 @@ class YesIntentHandler(AbstractRequestHandler):
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
-
+### When asked "Anything you would want to know more about?" by YesIntentHandler, gets the detail the user wants to know and reply
+### Currently only supports author
+### TODO: supports more details other than author, when said yes after this intent nothing really happens
 class AskDetailsHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         session_attr = handler_input.attributes_manager.session_attributes
@@ -215,6 +237,8 @@ class AskDetailsHandler(AbstractRequestHandler):
         return handler_input.response_builder.response
 
 
+### When asked about what specific political side says
+### TODO: remove this one since we are not dealing with side anymore
 class RelatedArticleHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         session_attr = handler_input.attributes_manager.session_attributes
@@ -224,7 +248,7 @@ class RelatedArticleHandler(AbstractRequestHandler):
         logger.info("In RelatedArticleHandler")
         article = getAttribute(handler_input, "article")
         speech_text = "I'm sorry I could not find more related articles"
-        side, success = getSlot(handler_input, "Details")
+        side, success = getSlot(handler_input, "Side")
         if success:
             speech_text = "I'm sorry there is no more related articles from %s side" % side
             with conn.cursor() as cur:
