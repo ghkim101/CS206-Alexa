@@ -21,6 +21,7 @@ from ask_sdk_model.dialog import ElicitSlotDirective
 from ask_sdk_model.slu.entityresolution import StatusCode
 
 sb = SkillBuilder()
+skillName = "News Chat"
 
 rds_host  = "cs206.ci8sromxgv9w.us-west-2.rds.amazonaws.com"
 name = rds_config.db_username
@@ -33,14 +34,15 @@ logger.setLevel(logging.INFO)
 ch = logging.StreamHandler()
 logger.addHandler(ch)
 
-
 #conection
 try:
     conn = pymysql.connect(rds_host, user=name, passwd=password, db=db_name, connect_timeout=5)
 except:
     logger.error("ERROR: Unexpected error: Could not connect to MySql instance.")
     sys.exit()
-logger.info("connection worked")
+
+#common strings
+youCanAskFor = "You can ask me to read the top news from any source like The New York Times or CNN. I can also give you news by topic if you let me know what you want to hear about -- that can be politics, entertainment, music, or (almost) anything else you can think of."
 
 #helpers for getting and posting attributes
 def getAttribute(handler_input, key):
@@ -50,6 +52,9 @@ def getAttribute(handler_input, key):
 
 def postAttribute(handler_input, key, value):
     attribute_manager = handler_input.attributes_manager
+    if attribute_manager is None:
+        logger.info("No attribute_manager is available")
+        return #bye felicia
     session_attr = attribute_manager.session_attributes
     session_attr[key] = value
 
@@ -62,7 +67,14 @@ def getSlot(handler_input, key):
             return resolution.values[0].value.name, True
     except Exception as e:
         logger.info(e)
-        return None , False
+        return None, False
+
+#TODO: Python map of users, in-memory.
+def getUser(handler_input):
+    userId = handler_input.request_envelope.context.System.user.user_id;
+    #^ TODO test and make sure a valid userID is available
+    return None
+
 
 ### reacts to invocation
 class LaunchRequestHandler(AbstractRequestHandler):
@@ -73,42 +85,17 @@ class LaunchRequestHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = "Hi there! I can help you navigate news better. Ask me anything!"
 
+        #TODO: Collect relevant user information:
+        # if cannot getUser(handler_input)
+            #"Hi there! I can help you navigate news better. It looks like this is your first time using News Chat. What's your name?"
+        #else
+            #"Hi {user name}, let's chat about the news. "  + youCanAskFor
+
+        speech_text = "Hi! let's chat about the news. " + youCanAskFor
         handler_input.response_builder.speak(speech_text).set_card(
-            SimpleCard("Hello World", speech_text)).set_should_end_session(
+            SimpleCard(skillName, speech_text)).set_should_end_session(
             False)
-        return handler_input.response_builder.response
-
-
-### Get an article in the topic when asked about specific topic. Currently supports topic only (not source).
-### Asks if like the article => Yes_Intent_Hanlder
-### TODO: accomodate source slot, Integrate into what's new handler
-
-class WhatsNewSpecificIntentHandler(AbstractRequestHandler):
-    """Handler for Whats New Intent."""
-    def can_handle(self, handler_input):
-        # type: (HandlerInput) -> bool
-        return is_intent_name("WhatsNewSpecificIntent")(handler_input)
-    def handle(self, handler_input):
-
-        logger.info("In WhatsNewSpecificIntentHandler")
-        speech_text = "I couldn't find anything about it"
-        try:
-            topic, success = getSlot(handler_input, "Topic")
-            if success:
-                speech_text = "Currently there is no news about " + topic
-                with conn.cursor() as cur:
-                    cur.execute('select * from articles where lower(topic) = %s ORDER BY created_at desc limit 1', topic);
-                    result = cur.fetchall()
-                    for row in result:
-                        speech_text = "Here is one headline in %s. Title is %s. Do you want to read this article?" % (row[1], row[2])
-                        postAttribute(handler_input, "article", row)
-
-        except Exception as e:
-                 logger.info(e)
-
-        handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
 ### Get three top articles from all sides (unbiased_balanced ones)
@@ -121,9 +108,34 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         # type: (HandlerInput) -> bool
         return is_intent_name("WhatsNewIntent")(handler_input)
 
-    def handle(self, handler_input):
-        # type: (HandlerInput) -> Response
-        logger.info("In WhatsNewIntentHandler")
+    def handle_topic(topic, handler_input):
+        print("WhatsNewIntentHandler:handle_topic(_)")
+        speech_text = "We have no news about " + topic + " at this time. " + youCanAskFor
+        with conn.cursor() as cur:
+            cur.execute('select * from articles where lower(topic) LIKE %s ORDER BY created_at desc limit 1', "%" + topic + "%");
+            result = cur.fetchall()
+            for row in result:
+                #TODO what exactly is returned here?
+                speech_text = "Here is one headline in %s. Title is %s. Do you want to read this article?" % (row[1], row[2])
+                #postAttribute(handler_input, "article", row)
+
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
+        return handler_input.response_builder.response
+
+    def handle_source(source, handler_input):
+        print("WhatsNewIntentHandler:handle_source(_)")
+
+        speech_text = "We have no news about " + source + " at this time. " + youCanAskFor
+        with conn.cursor() as cur:
+            cur.execute('select * from articles where lower(source) LIKE %s ORDER BY created_at desc limit 1', "%" + source + "%");
+            result = cur.fetchall()
+            #for row in result:
+                #TODO what exactly is returned here?
+
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
+        return handler_input.response_builder.response
+
+    def handle_news(handler_input):
 
         with conn.cursor() as cur:
             cur.execute('select * from articles where side = %s ORDER BY created_at DESC limit 3', 'unbiased_balanced');
@@ -143,6 +155,20 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
 
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
+
+    def handle(self, handler_input):
+        # type: (HandlerInput) -> Response
+        attribute_manager = handler_input.attributes_manager
+        logger.info("WhatsNewIntentHandler:handle()")
+        topic, _ = getSlot(handler_input, "Topic")
+        source, _ = getSlot(handler_input, "Source") #TODO: test
+        if topic is not None:
+            return self.handle_topic(topic, handler_input)
+        elif source is not None:
+            return self.handle_source(source, handler_input)
+
+        return self.handle_news()
+
 
 ### User mentions order (first, second, third) -> Gives quick summary and lets user know how long the chosen article takes
 ### Asks user if wants to read the chosen articles
@@ -346,7 +372,6 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
 
 sb.add_request_handler(LaunchRequestHandler())
 sb.add_request_handler(WhatsNewIntentHandler())
-sb.add_request_handler(WhatsNewSpecificIntentHandler())
 
 sb.add_request_handler(HelpIntentHandler())
 sb.add_request_handler(CancelOrStopIntentHandler())
