@@ -44,30 +44,8 @@ except:
 #common strings
 youCanAskFor = "You can ask me to read the top news from any source like The New York Times or CNN. I can also give you news by topic if you let me know what you want to hear about -- that can be politics, entertainment, music, or (almost) anything else you can think of."
 
-#helpers for getting and posting attributes
-def getAttribute(handler_input, key):
-    attribute_manager = handler_input.attributes_manager
-    session_attr = attribute_manager.session_attributes
-    return session_attr[key]
-
-def postAttribute(handler_input, key, value):
-    attribute_manager = handler_input.attributes_manager
-    if attribute_manager is None:
-        logger.info("No attribute_manager is available")
-        return #bye felicia
-    session_attr = attribute_manager.session_attributes
-    session_attr[key] = value
 
 #helper for getting slot of specified key, return false for success if fails to fetch
-def getSlot(handler_input, key):
-    try:
-        slot = handler_input.request_envelope.request.intent.slots[key]
-        resolution = slot.resolutions.resolutions_per_authority[0]
-        if resolution.status.code == StatusCode.ER_SUCCESS_MATCH:
-            return resolution.values[0].value.name, True
-    except Exception as e:
-        logger.info(e)
-        return None, False
 
 #TODO: Python map of users, in-memory.
 def getUser(handler_input):
@@ -108,7 +86,8 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         # type: (HandlerInput) -> bool
         return is_intent_name("WhatsNewIntent")(handler_input)
 
-    def handle_topic(topic, handler_input):
+
+    def handle_topic(self, topic, handler_input):
         print("WhatsNewIntentHandler:handle_topic(_)")
         speech_text = "We have no news about " + topic + " at this time. " + youCanAskFor
         with conn.cursor() as cur:
@@ -122,7 +101,7 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
-    def handle_source(source, handler_input):
+    def handle_source(self,source, handler_input):
         print("WhatsNewIntentHandler:handle_source(_)")
 
         speech_text = "We have no news about " + source + " at this time. " + youCanAskFor
@@ -135,7 +114,7 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
-    def handle_news(handler_input):
+    def handle_news(self, handler_input):
 
         with conn.cursor() as cur:
             cur.execute('select * from articles where side = %s ORDER BY created_at DESC limit 3', 'unbiased_balanced');
@@ -150,7 +129,8 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
                     countword = "Second"
                 elif index == 1:
                     countword = "Third"
-            postAttribute(handler_input, "ids", row)
+            self.session_attr['ids'] = ids
+            # postAttribute(handler_input, "ids", row)
             speech_text += "Are you interested in any of these topics?"
 
         handler_input.response_builder.speak(speech_text).ask(speech_text)
@@ -159,15 +139,20 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
         attribute_manager = handler_input.attributes_manager
+        self.session_attr = attribute_manager.session_attributes
+        intent = handler_input.request_envelope.request.intent
         logger.info("WhatsNewIntentHandler:handle()")
-        topic, _ = getSlot(handler_input, "Topic")
-        source, _ = getSlot(handler_input, "Source") #TODO: test
-        if topic is not None:
+        slots = intent.slots
+        if 'Topic' in slots:
+            topic_slot = slots['Topic']
+            topic = topic_slot.resolutions.resolutions_per_authority[0].values[0].value.name
             return self.handle_topic(topic, handler_input)
-        elif source is not None:
+        if 'Source' in slots:
+            source_slot = slots['Source']
+            source = source_slot.resolutions.resolutions_per_authority[0].values[0].value.name
             return self.handle_source(source, handler_input)
 
-        return self.handle_news()
+        return self.handle_news(handler_input)
 
 
 ### User mentions order (first, second, third) -> Gives quick summary and lets user know how long the chosen article takes
@@ -188,7 +173,9 @@ class ChooseArticleIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         logger.info("In ConfirmArticleHandler")
-        ids = getAttribute(handler_input, "ids")
+        attribute_manager = handler_input.attributes_manager
+        self.session_attr = attribute_manager.session_attributes
+        ids = self.session_attr['ids']
         logger.info(ids)
         speech_text = "Got you! "
         id_selected = ids[0]
@@ -204,7 +191,7 @@ class ChooseArticleIntentHandler(AbstractRequestHandler):
             logger.info(results)
 
             for row in results:
-                postAttribute(handler_input, "article", row)
+                self.session_attr['article'] = row
                 speech_text += 'Here is a quick summary of the issue. '
                 speech_text += row[10]
                 speech_text += 'Would you like to read an article about this? '
@@ -216,7 +203,7 @@ class ChooseArticleIntentHandler(AbstractRequestHandler):
                         speech_text += 'It takes ' + str(self.get_duration(related_article[8])) + ' minutes to read.'
                     else:
                         speech_text += 'It takes less than a minute to read.'
-                    postAttribute(handler_input, "article", related_article)
+                    self.session_attr['article'] = related_article
 
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
@@ -235,7 +222,9 @@ class YesIntentHandler(AbstractRequestHandler):
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
         logger.info("In YesIntentHandler")
-        article = getAttribute(handler_input, "article")
+        attribute_manager = handler_input.attributes_manager
+        self.session_attr = attribute_manager.session_attributes
+        article =  self.session_attr['article']
         speech_text =  ("<say-as interpret-as='interjection'> Okay! here we go! </say-as>"
                    "{}" "...That's the end of the article."
                    " Anything you would want to know more about?"
@@ -254,7 +243,9 @@ class AskDetailsHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         logger.info("In AskDetailsHandler")
-        article = getAttribute(handler_input, "article")
+        attribute_manager = handler_input.attributes_manager
+        self.session_attr = attribute_manager.session_attributes
+        article =  self.session_attr['article']
         speech_text = "I unfortunately do not know much about that."
         detail, success = getSlot(handler_input, "Details")
         if success:
@@ -272,7 +263,9 @@ class RelatedArticleHandler(AbstractRequestHandler):
                 "article" in session_attr)
     def handle(self, handler_input):
         logger.info("In RelatedArticleHandler")
-        article = getAttribute(handler_input, "article")
+        attribute_manager = handler_input.attributes_manager
+        self.session_attr = attribute_manager.session_attributes
+        article =  self.session_attr['article']
         speech_text = "I'm sorry I could not find more related articles"
         side, success = getSlot(handler_input, "Side")
         if success:
@@ -288,7 +281,7 @@ class RelatedArticleHandler(AbstractRequestHandler):
                     for row in result:
                         speech_text = "There is a related article from %s, categorized as %s by Allsides.com. Here is the title. %s. " % (row[9], row[7] ,row[2])
                         speech_text += " Would you like to hear more?"
-                        postAttribute(handler_input, 'article', row)
+                        self.session_attr['article'] = row
 
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
