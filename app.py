@@ -42,7 +42,7 @@ except:
     sys.exit()
 
 #common strings
-youCanAskFor = "You can ask me to read the top news from any source like The New York Times or CNN. Or, I can give you news by topic such as politics, entertainment, music, or so on."
+youCanAskFor = "You can ask me to read the top news from any source like The New York Times or BBC. Or, I can give you news by topic such as politics, entertainment, music, or so on."
 
 
 #helper for getting slot of specified key, return false for success if fails to fetch
@@ -128,7 +128,7 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
     def handle_news(self, handler_input):
         print("WhatsNewIntentHandler:handle_news(_)")
         with conn.cursor() as cur:
-            cur.execute('select * from articles where side = %s ORDER BY created_at DESC limit 3', 'unbiased_balanced');
+            cur.execute('select * from articles where side = %s ORDER BY is_headline desc, created_at DESC limit 3', 'unbiased_balanced');
             result = cur.fetchall()
             self.session_attr['ids'], speech_text = self.read_choices(result, "")
 
@@ -266,7 +266,7 @@ class YesIntentHandler(AbstractRequestHandler):
         speech_text =  ("Okay! here we go!"
                            "{}" "... that was the end of the article."
                            "Anything you would like to know more about? you can reply with a simple yes, or ask for something specific like information about the author or the date of publication."
-                          .format(article[10][:1000]))
+                          .format(article[10][:400]))
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
@@ -338,7 +338,7 @@ class AskDetailsIntentHandler(AbstractRequestHandler):
         if len(indexes) == 0:
             name = article[12].split(',')[0]
             #TODO: have to parse datetime in more readable format
-            speech_text = "Here are some facts about the article. The article was written by %s in %s, and published on %s. " % (name, article[9] ,article[11])
+            speech_text = "Here are some facts about the article. The article was written by %s in %s, and published on %s. " % (name, article[9] ,article[11].split('T')[0])
             details, success = self.get_author_details_formatted(name)
             if success:
                 speech_text += details
@@ -351,17 +351,18 @@ class AskDetailsIntentHandler(AbstractRequestHandler):
 
         # these already read these two fields
         if 'author' in detail:
-            read_details(handler_input, article, [])
+            return self.read_details(handler_input, article, [])
 
         elif 'publicationDate' in detail:
-            read_details(handler_input, article, [])
+            return self.read_details(handler_input, article, [])
 
     def handle(self, handler_input):
         logger.info("In AskDetailsHandler")
         attribute_manager = handler_input.attributes_manager
         self.session_attr = attribute_manager.session_attributes
         article =  self.session_attr['article']
-
+        intent = handler_input.request_envelope.request.intent
+        slots = intent.slots
         if is_intent_name("AMAZON.YesIntent")(handler_input): #ambiguously said "Yes" when asked want to know more
             return self.read_details(handler_input, article, [])
 
