@@ -231,6 +231,7 @@ class ChooseArticleIntentHandler(AbstractRequestHandler):
 
 ### Reading article if user says yes.
 ### Asks whether the users wants to know more about details of an article
+### TODO: we have to make on for NOIntent to deal with no cases for each step
 class YesIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         session_attr = handler_input.attributes_manager.session_attributes
@@ -258,7 +259,7 @@ class YesIntentHandler(AbstractRequestHandler):
             return self.read_article(handler_input, article)
 
         #CONTEXT: WhatsNewIntent's "Do you want more from any one of these stories?"
-        elif prev_context == "listArticles": # TODO: shall we ask the user which one they are interested in the most? currently it just choses the first one.
+        elif prev_context == "listArticles": # TODO:(minor) shall we ask the user which one they are interested in the most? currently it just choses the first one.
             return ChooseArticleIntentHandler().handle(handler_input)
 
         #CONTEXT: ChooseArticleIntent -> YesIntentHandler's read_article "Anything you would want to know more about?"
@@ -284,7 +285,7 @@ class AskDetailsIntentHandler(AbstractRequestHandler):
                 author_details = results[0]
                 job = author_details[0]
                 beats = author_details[1]
-                if len(job) == 0 and len(beats) == 0: #columns are nulls
+                if len(job) == 0 and len(beats) == 0: #columns are nulls so we are not adding details
                     return "", False
                 details = "The author %s is " % name
                 if len(job) != 0:
@@ -300,7 +301,7 @@ class AskDetailsIntentHandler(AbstractRequestHandler):
             name = article[12].split(',')[-1]
             #TODO: have to parse datetime in more readable format
             speech_text = "Here are some facts about the article. The article was written by %s in %s, and published on %s. " % (name, article[9] ,article[11])
-            details, success = self.get_author_details(name) #TODO: test this function for success case
+            details, success = self.get_author_details(name)
             if success:
                 speech_text += details
 
@@ -315,7 +316,7 @@ class AskDetailsIntentHandler(AbstractRequestHandler):
         if is_intent_name("AMAZON.YesIntent")(handler_input): #ambiguously said "Yes" when asked want to know more
             return self.read_details(handler_input, article, [])
 
-        #TODO: check slots to see if the user is curious about particular detail
+        #TODO: check slots to see if the user is curious about particular detail (Add more slots other than author, and checks slots to deal with them here)
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
