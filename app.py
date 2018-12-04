@@ -78,63 +78,72 @@ class LaunchRequestHandler(AbstractRequestHandler):
 
 ### Get three top articles from all sides (unbiased_balanced ones)
 ### Asks if like any one of the articles => Yes_Intent_Hanlder
-### TODO: change to reflect new data pool, not just all-sides
-
 class WhatsNewIntentHandler(AbstractRequestHandler):
     """Handler for Whats New Intent."""
     def can_handle(self, handler_input):
         # type: (HandlerInput) -> bool
         return is_intent_name("WhatsNewIntent")(handler_input)
 
+    def read_choices(self, result, query):
+        ids = {}
+        speech_text = ""
+        if query == "topic":
+            speech_text = "We have no news about " + query + " at this time. " + youCanAskFor
+        elif query == "source":
+            speech_text = "We have no news from" + query + " at this time. " + youCanAskFor
+        for index, row in enumerate(result):
+            if index == 0:
+                speech_text = "OK. Let me read you the most recent three headlines "
+                if query != " ":
+                    speech_text += 'in %s' % query
+            speech_text += " %s.  " %  row[2]
+            ids[index] = row[0]
+        speech_text += "Do you want more from any one of these stories? Let me know which one if you have a specific one in mind."
+        return ids, speech_text
 
     def handle_topic(self, topic, handler_input):
         print("WhatsNewIntentHandler:handle_topic(_)")
-        speech_text = "We have no news about " + topic + " at this time. " + youCanAskFor
         with conn.cursor() as cur:
-            cur.execute('select * from articles where lower(topic) LIKE %s ORDER BY created_at desc limit 1', "%" + topic + "%");
+            print(topic)
+            cur.execute('select * from articles where lower(topic) = %s ORDER BY created_at desc limit 3',  topic );
             result = cur.fetchall()
-            for row in result:
-                #TODO what exactly is returned here?
-                speech_text = "Here is one headline in %s. Title is %s. Do you want to read this article?" % (row[1], row[2])
-                #postAttribute(handler_input, "article", row)
+            if len(result) < 3:
+                cur.execute('select * from articles where lower(topic) LIKE %s ORDER BY created_at desc limit %d', (3 - len(result) ,"%" + topic + "%"));
+                result2 = cur.fetchall()
 
+            self.session_attr['ids'], speech_text = self.read_choices(result, topic)
+
+        self.session_attr['prevContext'] = "listArticles"
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
     def handle_source(self,source, handler_input):
         print("WhatsNewIntentHandler:handle_source(_)")
-
-        speech_text = "We have no news about " + source + " at this time. " + youCanAskFor
         with conn.cursor() as cur:
-            cur.execute('select * from articles where lower(source) LIKE %s ORDER BY created_at desc limit 1', "%" + source + "%");
+            print(source)
+            cur.execute('select * from articles where lower(source) = %s ORDER BY created_at desc limit 3', source);
             result = cur.fetchall()
-            #for row in result:
-                #TODO what exactly is returned here?
+            if len(result) < 3:
+                cur.execute('select * from articles where lower(source) LIKE %s ORDER BY created_at desc limit %d', (3 - len(result) ,"%" + source + "%"));
+                result2 = cur.fetchall()
+            self.session_attr['ids'], speech_text = self.read_choices(result, source)
 
+        self.session_attr['prevContext'] = "listArticles"
         handler_input.response_builder.speak(speech_text).ask(speech_text)
+
         return handler_input.response_builder.response
 
     def handle_news(self, handler_input):
-
+        print("WhatsNewIntentHandler:handle_news(_)")
         with conn.cursor() as cur:
             cur.execute('select * from articles where side = %s ORDER BY created_at DESC limit 3', 'unbiased_balanced');
             result = cur.fetchall()
-            speech_text = "These are the top three headlines."
-            countword = "First"
-            ids = {}
-            for index, row in enumerate(result):
-                speech_text += " %s, %s." % (countword, row[2])
-                ids[index] = row[0]
-                if index == 0:
-                    countword = "Second"
-                elif index == 1:
-                    countword = "Third"
-            self.session_attr['ids'] = ids
-            # postAttribute(handler_input, "ids", row)
-            speech_text += "Are you interested in any of these topics?"
+            self.session_attr['ids'], speech_text = self.read_choices(result, "")
 
+        self.session_attr['prevContext'] = "listArticles"
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
+        # return handler_input.response_builder.response
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
@@ -145,20 +154,20 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         slots = intent.slots
         if 'Topic' in slots:
             topic_slot = slots['Topic']
-            topic = topic_slot.resolutions.resolutions_per_authority[0].values[0].value.name
-            return self.handle_topic(topic, handler_input)
+            if topic_slot.resolutions:
+                topic = topic_slot.resolutions.resolutions_per_authority[0].values[0].value.name
+                return self.handle_topic(topic, handler_input)
         if 'Source' in slots:
             source_slot = slots['Source']
-            source = source_slot.resolutions.resolutions_per_authority[0].values[0].value.name
-            return self.handle_source(source, handler_input)
+            if source_slot.resolutions:
+                source = source_slot.resolutions.resolutions_per_authority[0].values[0].value.name
+                return self.handle_source(source, handler_input)
 
         return self.handle_news(handler_input)
 
 
 ### User mentions order (first, second, third) -> Gives quick summary and lets user know how long the chosen article takes
 ### Asks user if wants to read the chosen articles
-### TODO:  more accomodation of intent invocation, functionality to send email if says no for reading time.
-
 class ChooseArticleIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         session_attr = handler_input.attributes_manager.session_attributes
@@ -171,120 +180,145 @@ class ChooseArticleIntentHandler(AbstractRequestHandler):
         round_up = int(math.ceil(minutes))
         return round_up
 
-    def handle(self, handler_input):
-        logger.info("In ConfirmArticleHandler")
-        attribute_manager = handler_input.attributes_manager
-        self.session_attr = attribute_manager.session_attributes
-        ids = self.session_attr['ids']
-        logger.info(ids)
-        speech_text = "Got you! "
-        id_selected = ids[0]
-        order, success = getSlot(handler_input, "Order")
-        if success:
-            id_selected = ids[str(order-1)]
+    def read_headline_and_ask(self, handler_input, article_id, order):
+        if order == "":
+            speech_text = "Okay let's start with the first one then. "
         else:
-            speech_text += " Let's go with the first one then."
+            speech_text = "Let's take a look. "
 
         with conn.cursor() as cur:
-            cur.execute('select * from articles where id = %s', id_selected)
+            speech_text += " This is the headline of the story. "
+            cur.execute('select * from articles where id = %s', article_id)
             results = cur.fetchall()
             logger.info(results)
+            article = results[0]
+            speech_text += article[3]
+            duration = self.get_duration(article[8])
+            if duration > 0:
+                speech_text += " It takes around " + str(duration) + " minutes to read."
+            else:
+                speech_text += " It takes less than a minute to read."
+            self.session_attr['article'] = article
 
-            for row in results:
-                self.session_attr['article'] = row
-                speech_text += 'Here is a quick summary of the issue. '
-                speech_text += row[10]
-                speech_text += 'Would you like to read an article about this? '
-                cur.execute("select * from articles join article_relations on articles.id = article_relations.related_to_id where article_relations.article_id = %s and lower(article_relations.relation_type) = 'center' or lower(article_relations.relation_type) like 'lean' limit 1" ,row[0])
-                related = cur.fetchall()
-                for related_article in related:
-                    related_duration = self.get_duration(related_article[8])
-                    if related_duration > 0:
-                        speech_text += 'It takes ' + str(self.get_duration(related_article[8])) + ' minutes to read.'
-                    else:
-                        speech_text += 'It takes less than a minute to read.'
-                    self.session_attr['article'] = related_article
-
+        speech_text += " Shall I start reading?"
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
+
+    def handle(self, handler_input):
+        attribute_manager = handler_input.attributes_manager
+        self.session_attr = attribute_manager.session_attributes
+        intent = handler_input.request_envelope.request.intent
+        logger.info("ChooseArticleIntentHandler:handle()")
+        slots = intent.slots
+        ids = self.session_attr['ids']
+
+        speech_text = "Got it. "
+        article_id = ids["0"]
+        self.session_attr['prevContext'] = "chooseArticle"
+        if is_intent_name("AMAZON.YesIntent")(handler_input): #ambiguously said "Yes" when asked interest in the list
+            return self.read_headline_and_ask(handler_input, article_id, "")
+        if 'Order' in slots:
+            try:
+                #slot is not filled (e.g. "just give me one")
+                order = int(slots['Order'].value)
+                article_id = ids[str(order-1)]
+                print("artile_id %d" % article_id)
+            except:
+                return self.read_headline_and_ask(handler_input, article_id, "")
+
+        return self.read_headline_and_ask(handler_input, article_id, order)
 
 
 ### Reading article if user says yes.
 ### Asks whether the users wants to know more about details of an article
-### TODO: there are more contexts for user to say yes other than yes to reading an article - we have to differentiate invocation after"yes" according to contexts
-###       no gracious fallback when said no
 class YesIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         session_attr = handler_input.attributes_manager.session_attributes
-        return (is_intent_name("AMAZON.YesIntent")(handler_input) and
-                "article" in session_attr)
+        return is_intent_name("AMAZON.YesIntent")(handler_input)
+
+    def read_article(self, handler_input, article):
+        speech_text =  ("Okay! here we go!"
+                           "{}" "...That's the end of the article."
+                           " Anything you would want to know more about?"
+                          .format(article[10][:1000]))
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
+        return handler_input.response_builder.response
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        logger.info("In YesIntentHandler")
+        logger.info("YesIntentHandler:handle()")
         attribute_manager = handler_input.attributes_manager
         self.session_attr = attribute_manager.session_attributes
-        article =  self.session_attr['article']
-        speech_text =  ("<say-as interpret-as='interjection'> Okay! here we go! </say-as>"
-                   "{}" "...That's the end of the article."
-                   " Anything you would want to know more about?"
-                  .format(article[10][:100]))
+        prev_context = self.session_attr["prevContext"]
+
+        #CONTEXT: ChooseArticleIntent's "Shall I start reading?"
+        if prev_context == "chooseArticle":
+            article = self.session_attr["article"]
+            self.session_attr["prevContext"] = "readArticle"
+            return self.read_article(handler_input, article)
+
+        #CONTEXT: WhatsNewIntent's "Do you want more from any one of these stories?"
+        elif prev_context == "listArticles": # TODO: shall we ask the user which one they are interested in the most? currently it just choses the first one.
+            return ChooseArticleIntentHandler().handle(handler_input)
+
+        #CONTEXT: ChooseArticleIntent -> YesIntentHandler's read_article "Anything you would want to know more about?"
+        elif prev_context == "readArticle":
+            return AskDetailsIntentHandler().handle(handler_input)
+
+        speech_text = "Sure! But sorry I just lost context of our conversation... Can we start over?" + youCanAskFor
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
 ### When asked "Anything you would want to know more about?" by YesIntentHandler, gets the detail the user wants to know and reply
-### Currently only supports author
-### TODO: supports more details other than author, when said yes after this intent nothing really happens
-class AskDetailsHandler(AbstractRequestHandler):
+class AskDetailsIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         session_attr = handler_input.attributes_manager.session_attributes
-        return (is_intent_name("AskDetailsIntent")(handler_input) and
-                "article" in session_attr)
+        return ((is_intent_name("AskDetailsIntent")(handler_input) and
+                "article" in session_attr) or is_intent_name("YesIntentHandler")(handler_input))
+
+    def get_author_details(self, name):
+        with conn.cursor() as cur:
+            cur.execute('select job, beats from authors where lower(name) LIKE %s', "%" + name.lower() + "%")
+            results = cur.fetchall()
+            if len(results) > 0:
+                author_details = results[0]
+                job = author_details[0]
+                beats = author_details[1]
+                if len(job) == 0 and len(beats) == 0: #columns are nulls
+                    return "", False
+                details = "The author %s is " % name
+                if len(job) != 0:
+                    details += job
+                if len(beats) != 0:
+                    details += " and usually writes about %s ." % beats
+                return details, True
+            return "", False
+
+    def read_details(self, handler_input, article, indexes):
+        speech_text = "Okay. "
+        if len(indexes) == 0:
+            name = article[12].split(',')[-1]
+            #TODO: have to parse datetime in more readable format
+            speech_text = "Here are some facts about the article. The article was written by %s in %s, and published on %s. " % (name, article[9] ,article[11])
+            details, success = self.get_author_details(name) #TODO: test this function for success case
+            if success:
+                speech_text += details
+
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
+        return handler_input.response_builder.response
 
     def handle(self, handler_input):
         logger.info("In AskDetailsHandler")
         attribute_manager = handler_input.attributes_manager
         self.session_attr = attribute_manager.session_attributes
         article =  self.session_attr['article']
-        speech_text = "I unfortunately do not know much about that."
-        detail, success = getSlot(handler_input, "Details")
-        if success:
-            speech_text = "The writer is specified as  %s. Do you want to know more about or from this writer?" % article[12]
+        if is_intent_name("AMAZON.YesIntent")(handler_input): #ambiguously said "Yes" when asked want to know more
+            return self.read_details(handler_input, article, [])
+
+        #TODO: check slots to see if the user is curious about particular detail
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
-
-### When asked about what specific political side says
-### TODO: remove this one since we are not dealing with side anymore
-class RelatedArticleHandler(AbstractRequestHandler):
-    def can_handle(self, handler_input):
-        session_attr = handler_input.attributes_manager.session_attributes
-        return (is_intent_name("RelatedArticleIntent")(handler_input) and
-                "article" in session_attr)
-    def handle(self, handler_input):
-        logger.info("In RelatedArticleHandler")
-        attribute_manager = handler_input.attributes_manager
-        self.session_attr = attribute_manager.session_attributes
-        article =  self.session_attr['article']
-        speech_text = "I'm sorry I could not find more related articles"
-        side, success = getSlot(handler_input, "Side")
-        if success:
-            speech_text = "I'm sorry there is no more related articles from %s side" % side
-            with conn.cursor() as cur:
-                cur.execute("select article_id from article_relations where related_to_id = %s limit 1" ,article[0])
-                origin_result = cur.fetchall()
-                origin_article_id = ''
-                for origin in origin_result:
-                    logger.info(origin[0])
-                    cur.execute("select * from articles join article_relations on articles.id = article_relations.related_to_id where article_relations.article_id = %s and lower(article_relations.relation_type) like %s and article_relations.related_to_id != %s  limit 1" ,(origin[0], side,article[0]))
-                    result = cur.fetchall()
-                    for row in result:
-                        speech_text = "There is a related article from %s, categorized as %s by Allsides.com. Here is the title. %s. " % (row[9], row[7] ,row[2])
-                        speech_text += " Would you like to hear more?"
-                        self.session_attr['article'] = row
-
-        handler_input.response_builder.speak(speech_text).ask(speech_text)
-        return handler_input.response_builder.response
 
 class HelpIntentHandler(AbstractRequestHandler):
     """Handler for Help Intent."""
@@ -365,15 +399,13 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
 
 sb.add_request_handler(LaunchRequestHandler())
 sb.add_request_handler(WhatsNewIntentHandler())
-
 sb.add_request_handler(HelpIntentHandler())
 sb.add_request_handler(CancelOrStopIntentHandler())
 sb.add_request_handler(FallbackIntentHandler())
 sb.add_request_handler(SessionEndedRequestHandler())
 sb.add_request_handler(ChooseArticleIntentHandler())
 sb.add_request_handler(YesIntentHandler())
-sb.add_request_handler(AskDetailsHandler())
-sb.add_request_handler(RelatedArticleHandler())
+sb.add_request_handler(AskDetailsIntentHandler())
 sb.add_exception_handler(CatchAllExceptionHandler())
 
 handler = sb.lambda_handler()
