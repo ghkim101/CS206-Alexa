@@ -42,7 +42,7 @@ except:
     sys.exit()
 
 #common strings
-youCanAskFor = "You can ask me to read the top news from any source like The New York Times or CNN. I can also give you news by topic if you let me know what you want to hear about -- that can be politics, entertainment, music, or (almost) anything else you can think of."
+youCanAskFor = "You can ask me to read the top news from any source like The New York Times or CNN. Or, I can give you news by topic such as politics, entertainment, music, or so on."
 
 
 #helper for getting slot of specified key, return false for success if fails to fetch
@@ -88,17 +88,17 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         ids = {}
         speech_text = ""
         if query == "topic":
-            speech_text = "We have no news about " + query + " at this time. " + youCanAskFor
+            speech_text = "We have no news about " + query + " at this time. Let's try again. " + youCanAskFor
         elif query == "source":
-            speech_text = "We have no news from" + query + " at this time. " + youCanAskFor
+            speech_text = "We have no news from " + query + " at this time. " + youCanAskFor
         for index, row in enumerate(result):
             if index == 0:
-                speech_text = "OK. Let me read you the most recent three headlines. "
+                speech_text = "OK. Let me read you the most recent three headlines "
                 if query != " ":
-                    speech_text += 'in %s' % query
-            speech_text += " %s.  " %  row[2]
+                    speech_text += ' in %s : <break time=\"1s\"/>' % query
+            speech_text += "Headline # {0}: {1}. <break time=\"1s\"/>".format(index+1, row[2])
             ids[index] = row[0]
-        speech_text += "Do you want more from any one of these stories? Let me know which one if you have a specific one in mind."
+        speech_text += "Do you want more from any one of these stories? You can specifically ask for the first, second, or third."
         return ids, speech_text
 
     def handle_topic(self, topic, handler_input):
@@ -220,10 +220,38 @@ class ChooseArticleIntentHandler(AbstractRequestHandler):
 
         return self.read_headline_and_ask(handler_input, article_id, order)
 
+### If a user says "no"
+### Loops back and/or ends the Alexa skill.
+class NoIntentHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        session_attr = handler_input.attributes_manager.session_attributes
+        return is_intent_name("AMAZON.NoIntent")(handler_input)
+
+    def handle(self, handler_input):
+        logger.info("NoIntentHandler:handle()")
+        attribute_manager = handler_input.attributes_manager
+        self.session_attr = attribute_manager.session_attributes
+        prev_context = self.session_attr["prevContext"]
+
+        #CONTEXT: ChooseArticleIntent's "Shall I start reading?"
+        if prev_context == "chooseArticle":
+            return FallbackIntentHandler().handle(handler_input)
+
+        #CONTEXT: WhatsNewIntent's "Do you want more from any one of these stories?"
+        elif prev_context == "listArticles": # TODO:(minor) ask user if we should show them three more stories
+            return FallbackIntentHandler().handle(handler_input)
+
+        #CONTEXT: ChooseArticleIntent -> YesIntentHandler's read_article "Anything you would want to know more about?"
+        elif prev_context == "readArticle":
+            return FallbackIntentHandler().handle(handler_input)
+
+        speech_text = "Sorry, I didn't catch that. " + youCanAskFor
+        handler_input.response_builder.speak(speech_text).ask(speech_text)
+        return handler_input.response_builder.response
+
 
 ### Reading article if user says yes.
 ### Asks whether the users wants to know more about details of an article
-### TODO: we have to make on for NOIntent to deal with no cases for each step
 class YesIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
         session_attr = handler_input.attributes_manager.session_attributes
@@ -231,8 +259,8 @@ class YesIntentHandler(AbstractRequestHandler):
 
     def read_article(self, handler_input, article):
         speech_text =  ("Okay! here we go!"
-                           "{}" "...That's the end of the article."
-                           " Anything you would want to know more about?"
+                           "{}" "... that was the end of the article."
+                           "Anything you would like to know more about? you can reply with a simple yes, or ask for something specific like information about the author or the date of publication."
                           .format(article[10][:1000]))
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
@@ -258,7 +286,9 @@ class YesIntentHandler(AbstractRequestHandler):
         elif prev_context == "readArticle":
             return AskDetailsIntentHandler().handle(handler_input)
 
-        speech_text = "Sure! But sorry I just lost context of our conversation... Can we start over?" + youCanAskFor
+        # do we need an excuse here?
+        #speech_text = "Sure! But sorry I just lost context of our conversation... Can we start over?" + youCanAskFor
+        speech_text = "Sorry, I didn't catch that. " + youCanAskFor
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
@@ -270,6 +300,17 @@ class AskDetailsIntentHandler(AbstractRequestHandler):
                 "article" in session_attr) or is_intent_name("YesIntentHandler")(handler_input))
 
     def get_author_details(self, name):
+        with conn.cursor() as cur:
+            cur.execute('select job, beats from authors where lower(name) LIKE %s', "%" + name.lower() + "%")
+            results = cur.fetchall()
+            if len(results) > 0:
+                author_details = results[0]
+                job = author_details[0]
+                beats = author_details[1]
+                return (job, beats)
+        return None
+
+    def get_author_details_formatted(self, name):
         with conn.cursor() as cur:
             cur.execute('select job, beats from authors where lower(name) LIKE %s', "%" + name.lower() + "%")
             results = cur.fetchall()
@@ -290,25 +331,41 @@ class AskDetailsIntentHandler(AbstractRequestHandler):
     def read_details(self, handler_input, article, indexes):
         speech_text = "Okay. "
         if len(indexes) == 0:
-            name = article[12].split(',')[-1]
+            name = article[12].split(',')[0]
             #TODO: have to parse datetime in more readable format
             speech_text = "Here are some facts about the article. The article was written by %s in %s, and published on %s. " % (name, article[9] ,article[11])
-            details, success = self.get_author_details(name)
+            details, success = self.get_author_details_formatted(name)
             if success:
                 speech_text += details
 
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
+    def handle_detail(self, handler_input, detail, article):
+        print(detail)
+
+        # these already read these two fields
+        if 'author' in detail:
+            read_details(handler_input, article, [])
+
+        elif 'publicationDate' in detail:
+            read_details(handler_input, article, [])
+
     def handle(self, handler_input):
         logger.info("In AskDetailsHandler")
         attribute_manager = handler_input.attributes_manager
         self.session_attr = attribute_manager.session_attributes
         article =  self.session_attr['article']
+
         if is_intent_name("AMAZON.YesIntent")(handler_input): #ambiguously said "Yes" when asked want to know more
             return self.read_details(handler_input, article, [])
 
-        #TODO: check slots to see if the user is curious about particular detail (Add more slots other than author, and checks slots to deal with them here)
+        if 'Details' in slots:
+            detail_slot = slots['Details']
+            if detail_slot.resolutions:
+                detail = detail_slot.resolutions.resolutions_per_authority[0].values[0].value.name
+                return self.handle_detail(handler_input, detail, article)
+
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
@@ -338,7 +395,7 @@ class CancelOrStopIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = "You’re welcome! As Walter Cronkite would say, 'And that’s the way it is' "
+        speech_text = "You are welcome! As Walter Cronkite would say, 'And that’s the way it is' "
 
         handler_input.response_builder.speak(speech_text)
         return handler_input.response_builder.response
@@ -355,7 +412,7 @@ class FallbackIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = "Okay bye for now! As Walter Cronkite would say, 'And that’s the way it is' "
+        speech_text = "Okay. As Walter Cronkite would say, 'And that’s the way it is' "
 
         handler_input.response_builder.speak(speech_text)
         return handler_input.response_builder.response
@@ -384,7 +441,7 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
         # type: (HandlerInput, Exception) -> Response
         logger.error(exception, exc_info=True)
 
-        speech = "Sorry, there was some problem. Please try again!!"
+        speech = "Sorry, we don't have information about what you requested. Anything else?"
         handler_input.response_builder.speak(speech).ask(speech)
 
         return handler_input.response_builder.response
