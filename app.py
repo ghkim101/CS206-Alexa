@@ -42,7 +42,7 @@ except:
     sys.exit()
 
 #common strings
-youCanAskFor = "You can ask me to read the top news from any source like The New York Times or BBC. Or, I can give you news by topic such as politics, entertainment, music, or so on."
+youCanAskFor = "You can ask me to read the top news from any source like The New York Times or BBC. Or, I can give you news by topic such as politics, entertainment, music, and so on."
 
 
 #helper for getting slot of specified key, return false for success if fails to fetch
@@ -263,10 +263,7 @@ class YesIntentHandler(AbstractRequestHandler):
         return is_intent_name("AMAZON.YesIntent")(handler_input)
 
     def read_article(self, handler_input, article):
-        speech_text =  ("Okay! here we go!"
-                           "{}" "... that was the end of the article."
-                           "Anything you would like to know more about? you can reply with a simple yes, or ask for something specific like information about the author or the date of publication."
-                          .format(article[10][:400]))
+        speech_text =  ("Okay! here we go! <break time=\"1s\"/> {} <break time=\"1s\"/> that was the end of the article. Anything you would like to know more about? you can reply with a simple yes, or ask for something specific like information about the author or the date of publication".format(article[10][:300]))
         handler_input.response_builder.speak(speech_text).ask(speech_text)
         return handler_input.response_builder.response
 
@@ -336,9 +333,17 @@ class AskDetailsIntentHandler(AbstractRequestHandler):
     def read_details(self, handler_input, article, indexes):
         speech_text = "Okay. "
         if len(indexes) == 0:
-            name = article[12].split(',')[0]
+
+            name = ""
+            if article[12] is not None:
+                name = article[12].split(',')[0]
+
+            time = ""
+            if article[11] is not None:
+                time = article[11].split('T')[0]
+
             #TODO: have to parse datetime in more readable format
-            speech_text = "Here are some facts about the article. The article was written by %s in %s, and published on %s. " % (name, article[9] ,article[11].split('T')[0])
+            speech_text = "The article was written by %s in %s, and published on %s. " % (name, article[9], time)
             details, success = self.get_author_details_formatted(name)
             if success:
                 speech_text += details
