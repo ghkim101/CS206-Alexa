@@ -93,7 +93,7 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
             speech_text = "We have no news from" + query + " at this time. " + youCanAskFor
         for index, row in enumerate(result):
             if index == 0:
-                speech_text = "OK. Let me read you the most recent three headlines "
+                speech_text = "OK. Let me read you the most recent three headlines. "
                 if query != " ":
                     speech_text += 'in %s' % query
             speech_text += " %s.  " %  row[2]
@@ -104,13 +104,8 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
     def handle_topic(self, topic, handler_input):
         print("WhatsNewIntentHandler:handle_topic(_)")
         with conn.cursor() as cur:
-            print(topic)
-            cur.execute('select * from articles where lower(topic) = %s ORDER BY created_at desc limit 3',  topic );
+            cur.execute('select * from articles where lower(topic) LIKE %s ORDER BY is_headline desc, created_at desc limit 3',  topic );
             result = cur.fetchall()
-            if len(result) < 3:
-                cur.execute('select * from articles where lower(topic) LIKE %s ORDER BY created_at desc limit %d', (3 - len(result) ,"%" + topic + "%"));
-                result2 = cur.fetchall()
-
             self.session_attr['ids'], speech_text = self.read_choices(result, topic)
 
         self.session_attr['prevContext'] = "listArticles"
@@ -121,11 +116,8 @@ class WhatsNewIntentHandler(AbstractRequestHandler):
         print("WhatsNewIntentHandler:handle_source(_)")
         with conn.cursor() as cur:
             print(source)
-            cur.execute('select * from articles where lower(source) = %s ORDER BY created_at desc limit 3', source);
+            cur.execute('select * from articles where lower(source) LIKE %s ORDER BY is_headline desc, created_at desc limit 3', source);
             result = cur.fetchall()
-            if len(result) < 3:
-                cur.execute('select * from articles where lower(source) LIKE %s ORDER BY created_at desc limit %d', (3 - len(result) ,"%" + source + "%"));
-                result2 = cur.fetchall()
             self.session_attr['ids'], speech_text = self.read_choices(result, source)
 
         self.session_attr['prevContext'] = "listArticles"
