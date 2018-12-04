@@ -227,6 +227,11 @@ class NoIntentHandler(AbstractRequestHandler):
         session_attr = handler_input.attributes_manager.session_attributes
         return is_intent_name("AMAZON.NoIntent")(handler_input)
 
+    def handle_no(self, handler_input):
+        speech_text = 'Okay. Feel free to ask for anything else. You can ask for \"help\" to get info on what you can ask me for, or say "exit" to wrap-up this interaction.'
+        handler_input.response_builder.speak(speech_text)
+        return handler_input.response_builder.response
+
     def handle(self, handler_input):
         logger.info("NoIntentHandler:handle()")
         attribute_manager = handler_input.attributes_manager
@@ -235,15 +240,15 @@ class NoIntentHandler(AbstractRequestHandler):
 
         #CONTEXT: ChooseArticleIntent's "Shall I start reading?"
         if prev_context == "chooseArticle":
-            return FallbackIntentHandler().handle(handler_input)
+            return self.handle_no(handler_input)
 
         #CONTEXT: WhatsNewIntent's "Do you want more from any one of these stories?"
         elif prev_context == "listArticles": # TODO:(minor) ask user if we should show them three more stories
-            return FallbackIntentHandler().handle(handler_input)
+            return self.handle_no(handler_input)
 
         #CONTEXT: ChooseArticleIntent -> YesIntentHandler's read_article "Anything you would want to know more about?"
         elif prev_context == "readArticle":
-            return FallbackIntentHandler().handle(handler_input)
+            return self.handle_no(handler_input)
 
         speech_text = "Sorry, I didn't catch that. " + youCanAskFor
         handler_input.response_builder.speak(speech_text).ask(speech_text)
@@ -378,11 +383,11 @@ class HelpIntentHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         # type: (HandlerInput) -> Response
-        speech_text = "You can ask whats new to me!"
+        speech_text = youCanAskFor
 
         handler_input.response_builder.speak(speech_text).ask(
             speech_text).set_card(SimpleCard(
-                "Hello World", speech_text))
+                skillName, speech_text))
         return handler_input.response_builder.response
 
 
@@ -455,6 +460,7 @@ sb.add_request_handler(FallbackIntentHandler())
 sb.add_request_handler(SessionEndedRequestHandler())
 sb.add_request_handler(ChooseArticleIntentHandler())
 sb.add_request_handler(YesIntentHandler())
+sb.add_request_handler(NoIntentHandler())
 sb.add_request_handler(AskDetailsIntentHandler())
 sb.add_exception_handler(CatchAllExceptionHandler())
 
